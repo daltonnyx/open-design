@@ -43,6 +43,32 @@ export function isSourceMappableManualEditElement(el: Element): boolean {
   return el.hasAttribute('data-od-id') || el.hasAttribute(MANUAL_EDIT_SOURCE_PATH_ATTR);
 }
 
+export function buildManualEditKeyboardGuard(): string {
+  return `<script data-od-edit-keyboard-guard>(function(){
+  window.__odEditGuard = window.__odEditGuard || { editingEl: null };
+  function shouldBlock(){
+    var el = window.__odEditGuard && window.__odEditGuard.editingEl;
+    return el && el.isConnected;
+  }
+  function wrapAddListener(original){
+    return function(type, listener, options){
+      if (type === 'keydown' && typeof listener === 'function') {
+        var wrapped = function(ev){
+          if (shouldBlock() && (window.__odEditGuard.editingEl === ev.target || window.__odEditGuard.editingEl.contains(ev.target))) {
+            return;
+          }
+          return listener.call(this, ev);
+        };
+        return original.call(this, type, wrapped, options);
+      }
+      return original.call(this, type, listener, options);
+    };
+  }
+  document.addEventListener = wrapAddListener(document.addEventListener.bind(document));
+  window.addEventListener = wrapAddListener(window.addEventListener.bind(window));
+})();</script>`;
+}
+
 export function buildManualEditBridge(enabled: boolean): string {
   return `<script data-od-edit-bridge>(function(){
   var enabled = ${JSON.stringify(enabled)};
@@ -237,19 +263,35 @@ export function buildManualEditBridge(enabled: boolean): string {
       sel.addRange(range);
     } catch (e) {}
   }
+  var guard = window.__odEditGuard || null;
   function makeEditable(el, clickEvent){
     if (!el || el.getAttribute('contenteditable') === 'true') return;
     var originalText = el.textContent || '';
     clearSelectedTarget();
     el.setAttribute('contenteditable', 'plaintext-only');
     el.setAttribute('data-od-editing', 'true');
+    if (guard) guard.editingEl = el;
     try { el.focus(); } catch (e) {}
     placeCaretFromClick(clickEvent, el);
+    function onKey(ev){
+      if (ev.key === 'Enter' && !ev.shiftKey) {
+        ev.preventDefault();
+        finish(true);
+        try { el.blur(); } catch (e2) {}
+      }
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        finish(false);
+        try { el.blur(); } catch (e2) {}
+      }
+    }
+    el.addEventListener('keydown', onKey);
     function finish(commit){
       el.removeAttribute('contenteditable');
       el.removeAttribute('data-od-editing');
       el.removeEventListener('blur', onBlur);
       el.removeEventListener('keydown', onKey);
+      if (guard) guard.editingEl = null;
       var value = (el.textContent || '').trim();
       if (commit && value !== originalText.trim()) {
         window.parent.postMessage({
@@ -262,20 +304,7 @@ export function buildManualEditBridge(enabled: boolean): string {
       }
     }
     function onBlur(){ finish(true); }
-    function onKey(ev){
-      if (ev.key === 'Enter' && !ev.shiftKey) {
-        ev.preventDefault();
-        finish(true);
-        try { el.blur(); } catch (e) {}
-      }
-      if (ev.key === 'Escape') {
-        ev.preventDefault();
-        finish(false);
-        try { el.blur(); } catch (e) {}
-      }
-    }
     el.addEventListener('blur', onBlur);
-    el.addEventListener('keydown', onKey);
   }
   function camelToKebab(name){ return String(name).replace(/[A-Z]/g, function(m){ return '-' + m.toLowerCase(); }); }
   function cssEscapeId(value){ if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(value); return String(value).replace(/"/g, '\\\\"'); }
