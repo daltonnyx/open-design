@@ -50,22 +50,46 @@ export function buildManualEditKeyboardGuard(): string {
     var el = window.__odEditGuard && window.__odEditGuard.editingEl;
     return el && el.isConnected;
   }
-  function wrapAddListener(original){
-    return function(type, listener, options){
+  function captureFromOptions(options){
+    if (options == null) return false;
+    if (typeof options === 'boolean') return options;
+    return !!(options && options.capture);
+  }
+  function patchTarget(target){
+    var originalAdd = target.addEventListener.bind(target);
+    var originalRemove = target.removeEventListener.bind(target);
+    var wrapped = []; // [{ original, handler, capture }] so removeEventListener can map back to the registered wrapper
+    target.addEventListener = function(type, listener, options){
       if (type === 'keydown' && typeof listener === 'function') {
-        var wrapped = function(ev){
+        var capture = captureFromOptions(options);
+        var handler = function(ev){
           if (shouldBlock() && (window.__odEditGuard.editingEl === ev.target || window.__odEditGuard.editingEl.contains(ev.target))) {
             return;
           }
           return listener.call(this, ev);
         };
-        return original.call(this, type, wrapped, options);
+        wrapped.push({ original: listener, handler: handler, capture: capture });
+        return originalAdd(type, handler, options);
       }
-      return original.call(this, type, listener, options);
+      return originalAdd(type, listener, options);
+    };
+    target.removeEventListener = function(type, listener, options){
+      if (type === 'keydown' && typeof listener === 'function') {
+        var capture = captureFromOptions(options);
+        for (var i = wrapped.length - 1; i >= 0; i--) {
+          var entry = wrapped[i];
+          if (entry.original === listener && entry.capture === capture) {
+            originalRemove(type, entry.handler, options);
+            wrapped.splice(i, 1);
+            return;
+          }
+        }
+      }
+      return originalRemove(type, listener, options);
     };
   }
-  document.addEventListener = wrapAddListener(document.addEventListener.bind(document));
-  window.addEventListener = wrapAddListener(window.addEventListener.bind(window));
+  patchTarget(document);
+  patchTarget(window);
 })();</script>`;
 }
 

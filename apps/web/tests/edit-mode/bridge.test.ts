@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
 import {
   buildManualEditBridge,
+  buildManualEditKeyboardGuard,
   isMeaningfulManualEditElement,
   isManualEditHostNode,
   isSourceMappableManualEditElement,
@@ -415,6 +416,64 @@ describe('manual edit bridge target normalization', () => {
     expect(postMessage).not.toHaveBeenCalledWith(expect.objectContaining({
       type: 'od-edit-text-commit',
     }), '*');
+
+    dom.window.close();
+  });
+
+  it('removes a window keydown listener registered with the original callback, so the wrapper is not left firing', () => {
+    const guardHtml = buildManualEditKeyboardGuard();
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body>${guardHtml}</body></html>`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const listener = vi.fn();
+
+    dom.window.addEventListener('keydown', listener);
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    dom.window.removeEventListener('keydown', listener);
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    dom.window.close();
+  });
+
+  it('removes a document keydown listener registered with the original callback, so the wrapper is not left firing', () => {
+    const guardHtml = buildManualEditKeyboardGuard();
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body>${guardHtml}</body></html>`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const listener = vi.fn();
+
+    dom.window.document.addEventListener('keydown', listener);
+    dom.window.document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    dom.window.document.removeEventListener('keydown', listener);
+    dom.window.document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    dom.window.close();
+  });
+
+  it('matches the capture flag when removing a wrapped keydown listener', () => {
+    const guardHtml = buildManualEditKeyboardGuard();
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body>${guardHtml}</body></html>`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const bubbleListener = vi.fn();
+    const captureListener = vi.fn();
+
+    dom.window.addEventListener('keydown', bubbleListener, false);
+    dom.window.addEventListener('keydown', captureListener, true);
+
+    dom.window.removeEventListener('keydown', bubbleListener, false);
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(bubbleListener).not.toHaveBeenCalled();
+    expect(captureListener).toHaveBeenCalledTimes(1);
 
     dom.window.close();
   });
