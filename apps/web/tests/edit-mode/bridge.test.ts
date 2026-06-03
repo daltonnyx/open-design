@@ -498,6 +498,50 @@ describe('manual edit bridge target normalization', () => {
     dom.window.close();
   });
 
+  it('cleans up wrapped entry after a once:true listener fires, allowing re-registration', () => {
+    const guardHtml = buildManualEditKeyboardGuard();
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body>${guardHtml}</body></html>`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const listener = vi.fn();
+
+    dom.window.addEventListener('keydown', listener, { once: true, capture: true });
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1); // once fires once
+
+    // After once fires, the browser removed the handler; re-adding the same callback should work
+    dom.window.addEventListener('keydown', listener, { once: true, capture: true });
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'b' }));
+    expect(listener).toHaveBeenCalledTimes(2); // re-registered and fired again
+
+    dom.window.close();
+  });
+
+  it('cleans up wrapped entry when an AbortSignal aborts, allowing re-registration', () => {
+    const guardHtml = buildManualEditKeyboardGuard();
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body>${guardHtml}</body></html>`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const listener = vi.fn();
+    const controller = new dom.window.AbortController();
+
+    dom.window.addEventListener('keydown', listener, { signal: controller.signal, capture: true });
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    controller.abort(); // browser removes the handler; our bookkeeping must also drop the entry
+
+    // Re-adding the same callback/capture should now succeed (not be treated as a duplicate)
+    const controller2 = new dom.window.AbortController();
+    dom.window.addEventListener('keydown', listener, { signal: controller2.signal, capture: true });
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'b' }));
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    dom.window.close();
+  });
+
   it('blocks clicks on unmapped elements while edit mode is enabled', () => {
     const dom = new JSDOM(
       `<main><button id="cta">Launch</button></main>${buildManualEditBridge(true)}`,

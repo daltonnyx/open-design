@@ -55,6 +55,24 @@ export function buildManualEditKeyboardGuard(): string {
     if (typeof options === 'boolean') return options;
     return !!(options && options.capture);
   }
+  function onceFromOptions(options){
+    if (options == null) return false;
+    if (typeof options === 'boolean') return false;
+    return !!(options && options.once);
+  }
+  function signalFromOptions(options){
+    if (options == null) return null;
+    if (typeof options === 'boolean') return null;
+    return (options && options.signal) || null;
+  }
+  function removeWrappedEntry(wrapped, handler){
+    for (var i = wrapped.length - 1; i >= 0; i--) {
+      if (wrapped[i].handler === handler) {
+        wrapped.splice(i, 1);
+        return;
+      }
+    }
+  }
   function patchTarget(target){
     var originalAdd = target.addEventListener.bind(target);
     var originalRemove = target.removeEventListener.bind(target);
@@ -65,13 +83,21 @@ export function buildManualEditKeyboardGuard(): string {
         for (var i = 0; i < wrapped.length; i++) {
           if (wrapped[i].original === listener && wrapped[i].capture === capture) return;
         }
+        var once = onceFromOptions(options);
         var handler = function(ev){
+          if (once) removeWrappedEntry(wrapped, handler);
           if (shouldBlock() && (window.__odEditGuard.editingEl === ev.target || window.__odEditGuard.editingEl.contains(ev.target))) {
             return;
           }
           return listener.call(this, ev);
         };
         wrapped.push({ original: listener, handler: handler, capture: capture });
+        var signal = signalFromOptions(options);
+        if (signal) {
+          signal.addEventListener('abort', function(){
+            removeWrappedEntry(wrapped, handler);
+          });
+        }
         return originalAdd(type, handler, options);
       }
       return originalAdd(type, listener, options);
