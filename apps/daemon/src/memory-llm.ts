@@ -26,7 +26,11 @@
 //      switch to OpenAI but reuse my existing key" change costs zero
 //      typing.
 //   1. current Local CLI, when the caller passed `chatAgentId` and the
-//      agent supports headless one-shot output (Claude Code today).
+//      agent supports headless one-shot output (Claude Code, Codex,
+//      OpenCode, or AgentCrew's `job` command today). AgentCrew's
+//      `job` command is a one-shot agent loop that accepts a task
+//      string and outputs the response to stdout; it uses the same
+//      provider/model as the current chat.
 //   2. matching provider env var for the current chat protocol.
 //   3. BYOK chat-config snapshot for API-mode chats.
 //   4. ANTHROPIC_API_KEY env → Claude Haiku 4.5 (legacy fallback)
@@ -217,6 +221,7 @@ function chatProtocolFromAgentId(agentId) {
     || id === 'hermes'
     || id === 'cursor-agent'
     || id === 'qoder'
+    || id === 'agentcrew-ai'
   ) {
     return 'openai';
   }
@@ -229,11 +234,34 @@ function canUseLocalCliForMemory(agentId, provider) {
   if (agentId === 'claude' && provider === 'anthropic') return true;
   if (agentId === 'codex' && provider === 'openai') return true;
   if (agentId === 'opencode' && provider === 'openai') return true;
+  // AgentCrew's `job` command is a one-shot agent loop that accepts a
+  // task string and outputs the response to stdout. It supports any
+  // provider/model the user has configured, so it works for all protocols.
+  if (agentId === 'agentcrew-ai') return true;
   return false;
 }
 
 function localCliProviderFor(agentId, provider, model) {
   if (!canUseLocalCliForMemory(agentId, provider)) return null;
+  // AgentCrew uses its `job` command for one-shot extraction, which is
+  // a different invocation path than the chat-CLI agents (claude/codex/opencode).
+  // The `agentcrew-job` transport spawns `agentcrew job --provider <p>
+  // --model-id <m> "<task>"` and parses stdout as JSON.
+  //
+  // For AgentCrew, the model string from settings is fully qualified
+  // like 'openai/gpt-4o-mini'. We store the full qualified model so
+  // callAgentCrewJob can split it into provider + model-id for the CLI flags.
+  if (agentId === 'agentcrew-ai') {
+    return {
+      kind: provider,
+      model: (typeof model === 'string' && model.trim()) || 'default',
+      baseUrl: 'local-cli',
+      apiVersion: '',
+      credentialSource: 'chat-cli',
+      transport: 'agentcrew-job',
+      agentId,
+    };
+  }
   return {
     kind: provider,
     model: (typeof model === 'string' && model.trim()) || 'default',
@@ -786,6 +814,147 @@ function extractJsonEventText(kind, raw, agentName) {
     .trim();
 }
 
+// AgentCrew's `job` command is a one-shot agent loop that runs a
+// single task and outputs the response to stdout. Unlike the chat-CLI
+// agents (claude/codex/opencode) that pipe prompts through stdin,
+// AgentCrew takes the task as a positional argument:
+//   agentcrew job --provider <p> --model-id <m> "<task>"
+//
+// The response is plain text on stdout (no JSON event stream), so we
+// parse it directly.
+//
+// The model from settings is a fully qualified string like
+// 'openai/gpt-4o-mini'. We split on '/' to extract provider and
+// model-id for the --provider and --model-id CLI flags.
+const AGENTCREW_JOB_TIMEOUT_MS = 120_000;
+
+async function callAgentCrewJob(provider, system, user, options) {
+  const def = getAgentDef('agentcrew-ai');
+  if (!def) {
+    throw new Error('AgentCrew is not installed');
+  }
+
+  let configuredAgentEnv = {};
+  try {
+    const appConfig = options?.dataDir ? await readAppConfig(options.dataDir) : {};
+    configuredAgentEnv = agentCliEnvForAgent(appConfig.agentCliEnv, def.id);
+  } catch {
+    configuredAgentEnv = {};
+  }
+
+  const launch = resolveAgentLaunch(def, configuredAgentEnv);
+  if (!launch?.launchPath) {
+    throw new Error('AgentCrew CLI is not installed or not on PATH');
+  }
+
+  const cwd =
+    typeof options?.projectRoot === 'string' && options.projectRoot.trim()
+      ? options.projectRoot
+      : process.cwd();
+
+  // Compose the memory extraction prompt as the task argument.
+  const task = [
+    system,
+    '',
+    'You are running as a background memory extractor. Do not use tools. Return strict JSON only.',
+    '',
+    user,
+  ].join('\n');
+
+  // Build the command: agentcrew job --provider <p> --model-id <m> "<task>"
+  // The model from settings is fully qualified like 'openai/gpt-4o-mini'.
+  // Split on '/' to extract provider and model-id for CLI flags.
+  const args = ['job'];
+  const qualifiedModel = provider.model || 'default';
+  if (qualifiedModel !== 'default' && qualifiedModel.includes('/')) {
+    const slashIdx = qualifiedModel.indexOf('/');
+    args.push('--provider', qualifiedModel.slice(0, slashIdx));
+    args.push('--model-id', qualifiedModel.slice(slashIdx + 1));
+  } else if (provider.kind && provider.kind !== 'local-cli') {
+    // Fallback: use the provider kind from the provider chain if the
+    // model isn't fully qualified.
+    args.push('--provider', provider.kind);
+    if (qualifiedModel !== 'default') {
+      args.push('--model-id', qualifiedModel);
+    }
+  }
+  args.push(task);
+
+  const env = applyAgentLaunchEnv(
+    spawnEnvForAgent(
+      def.id,
+      { ...process.env, ...(def.env || {}) },
+      configuredAgentEnv,
+      undefined,
+      { resolvedBin: launch.selectedPath },
+    ),
+    launch,
+  );
+  const invocation = createCommandInvocation({
+    command: launch.launchPath,
+    args,
+    env,
+  });
+
+  return await new Promise((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let closed = false;
+    const child = spawn(invocation.command, invocation.args, {
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      cwd,
+      shell: false,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    });
+
+    const finish = (err, text) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (err) reject(err);
+      else resolve(text);
+    };
+
+    // AgentCrew's job command may take longer than a simple API call
+    // since it runs a full agent loop. Give it up to 120 seconds.
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        if (!closed) child.kill('SIGKILL');
+      }, 2_000).unref?.();
+      finish(new Error(`AgentCrew job timed out after ${Math.round(AGENTCREW_JOB_TIMEOUT_MS / 1000)}s`));
+    }, AGENTCREW_JOB_TIMEOUT_MS);
+    timeout.unref?.();
+
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout = `${stdout}${chunk}`.slice(-64_000);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr = `${stderr}${chunk}`.slice(-8_000);
+    });
+    child.once('error', (err) => finish(err));
+    child.once('close', (code, signal) => {
+      closed = true;
+      if (code === 0) {
+        const text = stdout.trim();
+        if (text) {
+          finish(null, text);
+          return;
+        }
+      }
+      const detail = (stderr.trim() || stdout.trim() || 'no output').slice(0, 1000);
+      const status = signal ? `signal ${signal}` : `exit ${code}`;
+      finish(new Error(`AgentCrew job ${status}: ${detail}`));
+    });
+    // No stdin needed — the task is passed as a positional argument.
+    child.stdin.end();
+  });
+}
+
 async function callLocalCli(provider, system, user, options) {
   if (typeof options?.localCliRunner === 'function') {
     return options.localCliRunner({
@@ -796,6 +965,13 @@ async function callLocalCli(provider, system, user, options) {
       projectRoot: options?.projectRoot ?? null,
       dataDir: options?.dataDir ?? null,
     });
+  }
+
+  // AgentCrew's `job` command is a one-shot agent loop that runs a
+  // single task and outputs the response to stdout. It uses a
+  // different invocation path than the chat-CLI agents.
+  if (provider.agentId === 'agentcrew-ai') {
+    return callAgentCrewJob(provider, system, user, options);
   }
 
   const def = getAgentDef(provider.agentId);
@@ -1070,7 +1246,8 @@ async function collectProposedEntries(dataDir, input, options) {
 
   let raw = '';
   try {
-    if (provider.transport === 'chat-cli') {
+    if (provider.transport === 'chat-cli'
+      || provider.transport === 'agentcrew-job') {
       raw = await callLocalCli(provider, systemPrompt, userPayload, {
         dataDir,
         projectRoot,

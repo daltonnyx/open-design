@@ -7,6 +7,10 @@ const AGENT_INSTALL_LINKS: Record<
     installUrl: 'https://github.com/nexu-io/vela',
     docsUrl: 'https://github.com/nexu-io/open-design/blob/main/docs/new-agent-runtime-acp.md',
   },
+  'agentcrew-ai': {
+    installUrl: 'https://agentcrew.dev/',
+    docsUrl: 'https://github.com/saigontechnology/AgentCrew/blob/main/CONFIGURATION.md',
+  },
   claude: {
     installUrl: 'https://docs.anthropic.com/en/docs/claude-code/setup',
     docsUrl: 'https://docs.anthropic.com/en/docs/claude-code',
