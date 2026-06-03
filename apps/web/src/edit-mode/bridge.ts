@@ -84,6 +84,11 @@ export function buildManualEditKeyboardGuard(): string {
           if (wrapped[i].original === listener && wrapped[i].capture === capture) return;
         }
         var once = onceFromOptions(options);
+        var signal = signalFromOptions(options);
+        if (signal && signal.aborted) {
+          // Already aborted — browser will not register the listener; skip bookkeeping entirely
+          return originalAdd(type, listener, options);
+        }
         var handler = function(ev){
           if (once) removeWrappedEntry(wrapped, handler);
           if (shouldBlock() && (window.__odEditGuard.editingEl === ev.target || window.__odEditGuard.editingEl.contains(ev.target))) {
@@ -92,7 +97,6 @@ export function buildManualEditKeyboardGuard(): string {
           return listener.call(this, ev);
         };
         wrapped.push({ original: listener, handler: handler, capture: capture });
-        var signal = signalFromOptions(options);
         if (signal) {
           signal.addEventListener('abort', function(){
             removeWrappedEntry(wrapped, handler);
