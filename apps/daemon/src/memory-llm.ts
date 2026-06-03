@@ -865,18 +865,11 @@ async function callAgentCrewJob(provider, system, user, options) {
   // The model from settings is fully qualified like 'openai/gpt-4o-mini'.
   // Split on '/' to extract provider and model-id for CLI flags.
   const args = ['job'];
-  const qualifiedModel = provider.model || 'default';
-  if (qualifiedModel !== 'default' && qualifiedModel.includes('/')) {
+  const qualifiedModel = provider.model;
+  if (qualifiedModel && qualifiedModel.includes('/')) {
     const slashIdx = qualifiedModel.indexOf('/');
     args.push('--provider', qualifiedModel.slice(0, slashIdx));
     args.push('--model-id', qualifiedModel.slice(slashIdx + 1));
-  } else if (provider.kind && provider.kind !== 'local-cli') {
-    // Fallback: use the provider kind from the provider chain if the
-    // model isn't fully qualified.
-    args.push('--provider', provider.kind);
-    if (qualifiedModel !== 'default') {
-      args.push('--model-id', qualifiedModel);
-    }
   }
   args.push(task);
 
