@@ -62,6 +62,9 @@ export function buildManualEditKeyboardGuard(): string {
     target.addEventListener = function(type, listener, options){
       if (type === 'keydown' && typeof listener === 'function') {
         var capture = captureFromOptions(options);
+        for (var i = 0; i < wrapped.length; i++) {
+          if (wrapped[i].original === listener && wrapped[i].capture === capture) return;
+        }
         var handler = function(ev){
           if (shouldBlock() && (window.__odEditGuard.editingEl === ev.target || window.__odEditGuard.editingEl.contains(ev.target))) {
             return;

@@ -458,6 +458,26 @@ describe('manual edit bridge target normalization', () => {
     dom.window.close();
   });
 
+  it('treats duplicate addEventListener with the same callback and capture as a no-op, matching native behavior', () => {
+    const guardHtml = buildManualEditKeyboardGuard();
+    const dom = new JSDOM(
+      `<!DOCTYPE html><html><body>${guardHtml}</body></html>`,
+      { runScripts: 'dangerously', url: 'http://localhost' },
+    );
+    const listener = vi.fn();
+
+    dom.window.addEventListener('keydown', listener, true);
+    dom.window.addEventListener('keydown', listener, true); // duplicate — should be no-op
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1); // fires once, not twice
+
+    dom.window.removeEventListener('keydown', listener, true); // single remove clears it
+    dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'a' }));
+    expect(listener).toHaveBeenCalledTimes(1); // no longer fires
+
+    dom.window.close();
+  });
+
   it('matches the capture flag when removing a wrapped keydown listener', () => {
     const guardHtml = buildManualEditKeyboardGuard();
     const dom = new JSDOM(
