@@ -875,15 +875,14 @@ async function callAgentCrewJob(provider, system, user, options) {
   const task = buildMemoryExtractionTask(system, user);
   assertAgentCrewTaskArgBudget(task);
 
-  // Build the command: agentcrew job --provider <p> --model-id <m> "<task>"
-  // The model from settings is fully qualified like 'openai/gpt-4o-mini'.
-  // Split on '/' to extract provider and model-id for CLI flags.
   const args = ['job'];
   const qualifiedModel = provider.model;
   if (qualifiedModel && qualifiedModel.includes('/')) {
     const slashIdx = qualifiedModel.indexOf('/');
     args.push('--provider', qualifiedModel.slice(0, slashIdx));
     args.push('--model-id', qualifiedModel.slice(slashIdx + 1));
+  } else if (qualifiedModel && qualifiedModel !== 'default') {
+    args.push('--model-id', qualifiedModel);
   }
   args.push(task);
 

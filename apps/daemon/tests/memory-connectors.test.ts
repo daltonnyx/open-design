@@ -986,6 +986,93 @@ describe('connector memory extraction', () => {
     expect(listExtractions()[0]?.error).toContain('requires the prompt as a command-line argument');
   });
 
+  it('passes a plain OD_MEMORY_MODEL override to AgentCrew as model-id without forcing provider', async () => {
+    await writeMemoryConfig(dataDir, { extraction: null });
+    const tempDir = await fsp.mkdtemp(path.join(tmpdir(), 'od-agentcrew-memory-'));
+    const binPath = path.join(tempDir, 'agentcrew');
+    const capturePath = path.join(tempDir, 'capture.json');
+    const previousPath = process.env.PATH;
+    const previousModel = process.env.OD_MEMORY_MODEL;
+    const previousCapture = process.env.OD_MEMORY_AGENTCREW_ARGS_OUT;
+
+    await fsp.writeFile(
+      binPath,
+      `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.writeFileSync(process.env.OD_MEMORY_AGENTCREW_ARGS_OUT, JSON.stringify({ args }));
+process.stdout.write(JSON.stringify({
+  entries: [{
+    type: 'project',
+    name: 'AgentCrew plain model memory',
+    description: 'AgentCrew memory used a plain model override',
+    body: 'OpenDesign connector memory extraction should pass plain AgentCrew model overrides as model-id without forcing a provider.'
+  }]
+}) + '\\n');
+`,
+      'utf8',
+    );
+    await fsp.chmod(binPath, 0o755);
+
+    try {
+      process.env.PATH = `${tempDir}${path.delimiter}${previousPath ?? ''}`;
+      process.env.OD_MEMORY_MODEL = 'sonnet';
+      process.env.OD_MEMORY_AGENTCREW_ARGS_OUT = capturePath;
+
+      const result = await suggestMemoryFromConnectors(dataDir, {
+        projectsRoot: process.cwd(),
+        projectRoot: process.cwd(),
+        connectorIds: ['notion'],
+        chatAgentId: 'agentcrew-ai',
+        chatModel: 'default',
+        service: createNotionService(),
+      });
+
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(result.suggestions).toEqual([
+        expect.objectContaining({
+          type: 'project',
+          name: 'AgentCrew plain model memory',
+        }),
+      ]);
+
+      const captured = JSON.parse(await fsp.readFile(capturePath, 'utf8'));
+      expect(captured.args).toEqual(expect.arrayContaining([
+        'job',
+        '--model-id',
+        'sonnet',
+      ]));
+      expect(captured.args).not.toContain('--provider');
+      expect(captured.args.at(-1)).toContain('You are a design-memory extractor');
+      expect(listExtractions()[0]).toMatchObject({
+        kind: 'connector',
+        phase: 'success',
+        provider: {
+          kind: 'openai',
+          model: 'sonnet',
+          credentialSource: 'chat-cli',
+        },
+      });
+    } finally {
+      if (previousPath == null) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+      if (previousModel == null) {
+        delete process.env.OD_MEMORY_MODEL;
+      } else {
+        process.env.OD_MEMORY_MODEL = previousModel;
+      }
+      if (previousCapture == null) {
+        delete process.env.OD_MEMORY_AGENTCREW_ARGS_OUT;
+      } else {
+        process.env.OD_MEMORY_AGENTCREW_ARGS_OUT = previousCapture;
+      }
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('runs Codex Local CLI through JSON event stream with stdin prompt', async () => {
     await writeMemoryConfig(dataDir, { extraction: null });
     const tempDir = await fsp.mkdtemp(path.join(tmpdir(), 'od-codex-memory-'));
