@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'vitest';
 import {
-  AGENT_DEFS, aider, antigravity, assert, claude, codex, copilot, cursorAgent, deepseek, devin, detectAgents, gemini, grokBuild, join, kilo, kiro, mkdtempSync, opencode, pi, qoder, qwen, rmSync, spawnEnvForAgent, tmpdir, vibe, writeFileSync, chmodSync,
+  AGENT_DEFS, agentcrew, aider, antigravity, assert, claude, codex, copilot, cursorAgent, deepseek, devin, detectAgents, gemini, grokBuild, join, kilo, kiro, mkdtempSync, opencode, pi, qoder, qwen, rmSync, spawnEnvForAgent, tmpdir, vibe, writeFileSync, chmodSync,
 } from './helpers/test-helpers.js';
 import { writeAntigravityModelSelection } from '../../src/runtimes/defs/antigravity.js';
 import type { TestAgentDef } from './helpers/test-helpers.js';
@@ -685,6 +685,15 @@ test('kilo args use acp subcommand for json-rpc streaming', () => {
 
   assert.deepEqual(args, ['acp']);
   assert.equal(kilo.streamFormat, 'acp-json-rpc');
+});
+
+test('agentcrew forwards external MCP servers through ACP and guards argv-sized job prompts', () => {
+  const args = agentcrew.buildArgs('', [], [], {});
+
+  assert.deepEqual(args, ['acp']);
+  assert.equal(agentcrew.streamFormat, 'acp-json-rpc');
+  assert.equal(agentcrew.externalMcpInjection, 'acp-merge');
+  assert.equal(agentcrew.maxPromptArgBytes, 30_000);
 });
 
 test('kilo fetchModels falls back to fallbackModels when detection fails', async () => {
