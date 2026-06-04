@@ -242,23 +242,23 @@ function canUseLocalCliForMemory(agentId, provider) {
   return false;
 }
 
-function localCliProviderFor(agentId, provider, model) {
+function localCliProviderFor(agentId, provider, model, credentialSource = 'chat-cli') {
   if (!canUseLocalCliForMemory(agentId, provider)) return null;
   // AgentCrew uses its `job` command for one-shot extraction, which is
   // a different invocation path than the chat-CLI agents (claude/codex/opencode).
   // The `agentcrew-job` transport spawns `agentcrew job --provider <p>
   // --model-id <m> "<task>"` and parses stdout as JSON.
   //
-  // For AgentCrew, the model string from settings is fully qualified
-  // like 'openai/gpt-4o-mini'. We store the full qualified model so
-  // callAgentCrewJob can split it into provider + model-id for the CLI flags.
+  // AgentCrew models may be provider-qualified from chat settings or plain
+  // ids from memory overrides. Keep the source so callAgentCrewJob can choose
+  // whether provider and model flags should be emitted separately.
   if (agentId === 'agentcrew-ai') {
     return {
       kind: provider,
       model: (typeof model === 'string' && model.trim()) || 'default',
       baseUrl: 'local-cli',
       apiVersion: '',
-      credentialSource: 'chat-cli',
+      credentialSource,
       transport: 'agentcrew-job',
       agentId,
     };
@@ -366,6 +366,7 @@ async function pickProvider(projectRoot, dataDir, chatAgentId, chatProvider, cha
         normalizedChatAgentId,
         override.provider,
         override.model,
+        'memory-config',
       );
       if (localCliProvider) return localCliProvider;
       return null;
@@ -881,8 +882,13 @@ async function callAgentCrewJob(provider, system, user, options) {
     const slashIdx = qualifiedModel.indexOf('/');
     args.push('--provider', qualifiedModel.slice(0, slashIdx));
     args.push('--model-id', qualifiedModel.slice(slashIdx + 1));
-  } else if (qualifiedModel && qualifiedModel !== 'default') {
-    args.push('--model-id', qualifiedModel);
+  } else {
+    if (provider.credentialSource === 'memory-config' && provider.kind) {
+      args.push('--provider', provider.kind);
+    }
+    if (qualifiedModel && qualifiedModel !== 'default') {
+      args.push('--model-id', qualifiedModel);
+    }
   }
   args.push(task);
 

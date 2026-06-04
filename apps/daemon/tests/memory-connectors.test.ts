@@ -1073,6 +1073,107 @@ process.stdout.write(JSON.stringify({
     }
   });
 
+  it('passes explicit AgentCrew memory provider override with a plain model and no API key', async () => {
+    await writeMemoryConfig(dataDir, {
+      extraction: {
+        provider: 'google',
+        apiKey: '',
+        model: 'gemini-2.0-flash',
+      },
+    });
+    const tempDir = await fsp.mkdtemp(path.join(tmpdir(), 'od-agentcrew-memory-config-'));
+    const binPath = path.join(tempDir, 'agentcrew');
+    const capturePath = path.join(tempDir, 'capture.json');
+    const previousPath = process.env.PATH;
+    const previousGoogleKey = process.env.GOOGLE_API_KEY;
+    const previousGeminiKey = process.env.GEMINI_API_KEY;
+    const previousCapture = process.env.OD_MEMORY_AGENTCREW_ARGS_OUT;
+
+    await fsp.writeFile(
+      binPath,
+      `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.writeFileSync(process.env.OD_MEMORY_AGENTCREW_ARGS_OUT, JSON.stringify({ args }));
+process.stdout.write(JSON.stringify({
+  entries: [{
+    type: 'project',
+    name: 'AgentCrew google memory override',
+    description: 'AgentCrew memory used an explicit google override',
+    body: 'OpenDesign connector memory extraction should pass explicit AgentCrew memory provider overrides to the job command.'
+  }]
+}) + '\\n');
+`,
+      'utf8',
+    );
+    await fsp.chmod(binPath, 0o755);
+
+    try {
+      process.env.PATH = `${tempDir}${path.delimiter}${previousPath ?? ''}`;
+      delete process.env.GOOGLE_API_KEY;
+      delete process.env.GEMINI_API_KEY;
+      process.env.OD_MEMORY_AGENTCREW_ARGS_OUT = capturePath;
+
+      const result = await suggestMemoryFromConnectors(dataDir, {
+        projectsRoot: process.cwd(),
+        projectRoot: process.cwd(),
+        connectorIds: ['notion'],
+        chatAgentId: 'agentcrew-ai',
+        chatModel: 'default',
+        service: createNotionService(),
+      });
+
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(result.suggestions).toEqual([
+        expect.objectContaining({
+          type: 'project',
+          name: 'AgentCrew google memory override',
+        }),
+      ]);
+
+      const captured = JSON.parse(await fsp.readFile(capturePath, 'utf8'));
+      expect(captured.args).toEqual(expect.arrayContaining([
+        'job',
+        '--provider',
+        'google',
+        '--model-id',
+        'gemini-2.0-flash',
+      ]));
+      expect(captured.args.at(-1)).toContain('You are a design-memory extractor');
+      expect(listExtractions()[0]).toMatchObject({
+        kind: 'connector',
+        phase: 'success',
+        provider: {
+          kind: 'google',
+          model: 'gemini-2.0-flash',
+          credentialSource: 'memory-config',
+        },
+      });
+    } finally {
+      if (previousPath == null) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+      if (previousGoogleKey == null) {
+        delete process.env.GOOGLE_API_KEY;
+      } else {
+        process.env.GOOGLE_API_KEY = previousGoogleKey;
+      }
+      if (previousGeminiKey == null) {
+        delete process.env.GEMINI_API_KEY;
+      } else {
+        process.env.GEMINI_API_KEY = previousGeminiKey;
+      }
+      if (previousCapture == null) {
+        delete process.env.OD_MEMORY_AGENTCREW_ARGS_OUT;
+      } else {
+        process.env.OD_MEMORY_AGENTCREW_ARGS_OUT = previousCapture;
+      }
+      await fsp.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('runs Codex Local CLI through JSON event stream with stdin prompt', async () => {
     await writeMemoryConfig(dataDir, { extraction: null });
     const tempDir = await fsp.mkdtemp(path.join(tmpdir(), 'od-codex-memory-'));
