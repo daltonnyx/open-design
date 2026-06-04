@@ -74,6 +74,7 @@ import {
 } from './agents.js';
 import { agentCliEnvForAgent, readAppConfig } from './app-config.js';
 import { createJsonEventStreamHandler } from './json-event-stream.js';
+import { checkPromptArgvBudget } from './runtimes/prompt-budget.js';
 
 const SYSTEM_PROMPT = `You are a memory extractor for a personal AI design assistant.
 
@@ -828,6 +829,24 @@ function extractJsonEventText(kind, raw, agentName) {
 // model-id for the --provider and --model-id CLI flags.
 const AGENTCREW_JOB_TIMEOUT_MS = 120_000;
 
+function buildMemoryExtractionTask(system, user) {
+  return [
+    system,
+    '',
+    'You are running as a background memory extractor. Do not use tools. Return strict JSON only.',
+    '',
+    user,
+  ].join('\n');
+}
+
+function assertAgentCrewTaskArgBudget(task) {
+  const def = getAgentDef('agentcrew-ai');
+  const promptBudgetError = checkPromptArgvBudget(def, task);
+  if (promptBudgetError) {
+    throw new Error(promptBudgetError.message);
+  }
+}
+
 async function callAgentCrewJob(provider, system, user, options) {
   const def = getAgentDef('agentcrew-ai');
   if (!def) {
@@ -853,13 +872,8 @@ async function callAgentCrewJob(provider, system, user, options) {
       : process.cwd();
 
   // Compose the memory extraction prompt as the task argument.
-  const task = [
-    system,
-    '',
-    'You are running as a background memory extractor. Do not use tools. Return strict JSON only.',
-    '',
-    user,
-  ].join('\n');
+  const task = buildMemoryExtractionTask(system, user);
+  assertAgentCrewTaskArgBudget(task);
 
   // Build the command: agentcrew job --provider <p> --model-id <m> "<task>"
   // The model from settings is fully qualified like 'openai/gpt-4o-mini'.
@@ -949,6 +963,10 @@ async function callAgentCrewJob(provider, system, user, options) {
 }
 
 async function callLocalCli(provider, system, user, options) {
+  if (provider.agentId === 'agentcrew-ai') {
+    assertAgentCrewTaskArgBudget(buildMemoryExtractionTask(system, user));
+  }
+
   if (typeof options?.localCliRunner === 'function') {
     return options.localCliRunner({
       agentId: provider.agentId,
@@ -989,13 +1007,7 @@ async function callLocalCli(provider, system, user, options) {
     typeof options?.projectRoot === 'string' && options.projectRoot.trim()
       ? options.projectRoot
       : process.cwd();
-  const prompt = [
-    system,
-    '',
-    'You are running as a background memory extractor. Do not use tools. Return strict JSON only.',
-    '',
-    user,
-  ].join('\n');
+  const prompt = buildMemoryExtractionTask(system, user);
 
   let args;
   let stdinText = prompt;

@@ -9,7 +9,12 @@ import {
   extractMemoryFromConnectors,
   suggestMemoryFromConnectors,
 } from '../src/memory-connectors.js';
-import { memoryDir, readMemoryEntry, writeMemoryConfig } from '../src/memory.js';
+import {
+  memoryDir,
+  readMemoryEntry,
+  upsertMemoryEntry,
+  writeMemoryConfig,
+} from '../src/memory.js';
 import {
   __resetExtractionsForTests,
   listExtractions,
@@ -939,6 +944,46 @@ describe('connector memory extraction', () => {
         credentialSource: 'chat-cli',
       },
     });
+  });
+
+  it('fails AgentCrew connector extraction before spawn when the task argv is oversized', async () => {
+    await writeMemoryConfig(dataDir, { extraction: null });
+    await upsertMemoryEntry(
+      dataDir,
+      {
+        id: 'project_large_agentcrew_context',
+        type: 'project',
+        name: 'Large AgentCrew context',
+        description: 'Large memory body should trip the argv guard',
+        body: 'OpenDesign AgentCrew memory context '.repeat(1_100),
+      },
+      { silent: true },
+    );
+    const localCliRunner = vi.fn(async () => JSON.stringify({ entries: [] }));
+
+    const result = await suggestMemoryFromConnectors(dataDir, {
+      projectsRoot: process.cwd(),
+      projectRoot: process.cwd(),
+      connectorIds: ['notion'],
+      chatAgentId: 'agentcrew-ai',
+      chatModel: 'default',
+      service: createNotionService(),
+      localCliRunner,
+    });
+
+    expect(result.attemptedLLM).toBe(true);
+    expect(result.suggestions).toEqual([]);
+    expect(localCliRunner).not.toHaveBeenCalled();
+    expect(listExtractions()[0]).toMatchObject({
+      kind: 'connector',
+      phase: 'failed',
+      provider: {
+        kind: 'openai',
+        model: 'default',
+        credentialSource: 'chat-cli',
+      },
+    });
+    expect(listExtractions()[0]?.error).toContain('requires the prompt as a command-line argument');
   });
 
   it('runs Codex Local CLI through JSON event stream with stdin prompt', async () => {

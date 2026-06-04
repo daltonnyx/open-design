@@ -17,4 +17,6 @@ export const agentCrewDef = {
   fallbackModels: [DEFAULT_MODEL_OPTION],
   buildArgs: () => ["acp"],
   streamFormat: "acp-json-rpc",
+  externalMcpInjection: "acp-merge",
+  maxPromptArgBytes: 30_000,
 } satisfies RuntimeAgentDef;
