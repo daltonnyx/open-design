@@ -17,6 +17,7 @@ const ICON_EXT: Record<string, 'svg' | 'png'> = {
   codex: 'svg',
   gemini: 'svg',
   opencode: 'svg',
+  'agentcrew-ai': 'svg',
   'cursor-agent': 'svg',
   copilot: 'svg',
   qwen: 'svg',
@@ -46,6 +47,7 @@ const ICON_EXT: Record<string, 'svg' | 'png'> = {
 // the asset through `<img>` it still renders as a legible dark mark
 // rather than collapsing to the SVG document's default black-on-…-black.
 const MONO_ICONS = new Set([
+  'agentcrew-ai',
   'cursor-agent',
   'opencode',
   'hermes',
