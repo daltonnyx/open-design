@@ -246,12 +246,13 @@ function localCliProviderFor(agentId, provider, model) {
   if (!canUseLocalCliForMemory(agentId, provider)) return null;
   // AgentCrew uses its `job` command for one-shot extraction, which is
   // a different invocation path than the chat-CLI agents (claude/codex/opencode).
-  // The `agentcrew-job` transport spawns `agentcrew job --provider <p>
-  // --model-id <m> "<task>"` and parses stdout as JSON.
+  // The `agentcrew-job` transport spawns `agentcrew job` with the
+  // selected extraction model when one is explicit, then parses stdout
+  // as JSON.
   //
-  // For AgentCrew, the model string from settings is fully qualified
-  // like 'openai/gpt-4o-mini'. We store the full qualified model so
-  // callAgentCrewJob can split it into provider + model-id for the CLI flags.
+  // For AgentCrew, the model string from settings can be fully qualified
+  // like 'openai/gpt-4o-mini' or a plain override like 'sonnet'. Store
+  // it as-is so callAgentCrewJob can decide which CLI flags are safe.
   if (agentId === 'agentcrew-ai') {
     return {
       kind: provider,
@@ -875,15 +876,24 @@ async function callAgentCrewJob(provider, system, user, options) {
   const task = buildMemoryExtractionTask(system, user);
   assertAgentCrewTaskArgBudget(task);
 
-  // Build the command: agentcrew job --provider <p> --model-id <m> "<task>"
-  // The model from settings is fully qualified like 'openai/gpt-4o-mini'.
-  // Split on '/' to extract provider and model-id for CLI flags.
+  // Build the command: provider-qualified models get both flags; plain
+  // non-default overrides still get --model-id so OD_MEMORY_MODEL and
+  // memory-config model overrides do not disappear on the AgentCrew path.
   const args = ['job'];
-  const qualifiedModel = provider.model;
-  if (qualifiedModel && qualifiedModel.includes('/')) {
-    const slashIdx = qualifiedModel.indexOf('/');
-    args.push('--provider', qualifiedModel.slice(0, slashIdx));
-    args.push('--model-id', qualifiedModel.slice(slashIdx + 1));
+  const configuredModel =
+    typeof provider.model === 'string' ? provider.model.trim() : '';
+  if (configuredModel && configuredModel !== 'default') {
+    if (configuredModel.includes('/')) {
+      const slashIdx = configuredModel.indexOf('/');
+      const providerId = configuredModel.slice(0, slashIdx).trim();
+      const modelId = configuredModel.slice(slashIdx + 1).trim();
+      if (providerId && modelId) {
+        args.push('--provider', providerId);
+        args.push('--model-id', modelId);
+      }
+    } else {
+      args.push('--model-id', configuredModel);
+    }
   }
   args.push(task);
 
